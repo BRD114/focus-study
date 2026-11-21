@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no, shrink-to-fit=no">
+<meta name="theme-color" content="#F6F7F4">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Focus">
+<meta name="color-scheme" content="light dark">
+<title>Focus · 专注</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ============ 应用主容器 ============ -->
+<div id="app" class="app">
+
+  <!-- ---------- 顶栏（标题随页面切换） ---------- -->
+  <header class="topbar" id="topbar">
+    <div class="topbar__text">
+      <h1 class="topbar__title" id="topTitle">专注</h1>
+      <p class="topbar__sub" id="topSub">今天也要稳稳推进</p>
+    </div>
+    <button class="icon-btn" id="btnQuickAdd" aria-label="新建任务" type="button">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <button class="icon-btn" id="themeBtn" aria-label="切换昼夜模式" type="button">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+        <path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8Z"/>
+      </svg>
+    </button>
+  </header>
+
+  <!-- ---------- 页面容器 ---------- -->
+  <main class="viewport" id="viewport">
+
+    <!-- ======== 1. 四象限任务 ======== -->
+    <section class="page is-active" data-page="tasks" id="page-tasks">
+      <div class="page__head">
+        <div class="seg" id="tasksSeg" role="tablist">
+          <button class="seg__btn is-active" data-view="matrix" type="button">四象限</button>
+          <button class="seg__btn" data-view="list" type="button">清单</button>
+        </div>
+        <div class="overview" id="tasksOverview"><!-- 完成进度概览 --></div>
+      </div>
+
+      <!-- 平面直角坐标系：横轴=紧急程度，纵轴=重要程度 -->
+      <div class="plane-legend" id="planeLegend" aria-hidden="true">
+        <span>↑ 重要</span>
+        <span>紧急 →</span>
+      </div>
+      <div class="matrix" id="matrix"><!-- 由 tasks.js 渲染 --></div>
+
+      <!-- 分组清单 -->
+      <div class="listview" id="listView" hidden><!-- 由 tasks.js 渲染 --></div>
+    </section>
+
+    <!-- ======== 2. 日程待办 ======== -->
+    <section class="page" data-page="todo" id="page-todo">
+      <div class="card checkin" id="checkinCard"><!-- 打卡条 --></div>
+
+      <h2 class="section-title">今日重点</h2>
+      <div class="stack" id="todayFocus"><!-- 置顶 / 今日到期任务 --></div>
+
+      <h2 class="section-title">
+        <span>待办清单</span>
+        <span class="section-title__meta" id="todoCount"></span>
+      </h2>
+      <div class="stack" id="todoList"><!-- 日常待办 --></div>
+      <form class="inline-add" id="todoForm" autocomplete="off">
+        <input id="todoInput" type="text" placeholder="添加一条待办，回车保存" maxlength="60">
+        <button class="inline-add__btn" type="submit" aria-label="添加">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </form>
+
+      <h2 class="section-title">
+        <span>长期目标</span>
+        <span class="section-title__meta" id="goalCount"></span>
+      </h2>
+      <div class="stack" id="goalList"><!-- 长期目标归档 --></div>
+      <form class="inline-add" id="goalForm" autocomplete="off">
+        <input id="goalInput" type="text" placeholder="添加一个长期目标，例如 蓝桥杯省一" maxlength="60">
+        <button class="inline-add__btn" type="submit" aria-label="添加">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </form>
+    </section>
+
+    <!-- ======== 3. 专注 ======== -->
+    <section class="page" data-page="focus" id="page-focus">
+      <div class="seg seg--full" id="focusSeg" role="tablist">
+        <button class="seg__btn is-active" data-mode="pomodoro" type="button">番茄专注</button>
+        <button class="seg__btn" data-mode="deep" type="button">深度专注</button>
+      </div>
+
+      <!-- 番茄钟 -->
+      <div id="pomodoroPane">
+        <div class="timer-wrap">
+          <svg class="timer-ring" viewBox="0 0 300 300" aria-hidden="true">
+            <circle class="timer-ring__track" cx="150" cy="150" r="136" fill="none" stroke-width="6"/>
+            <circle class="timer-ring__bar" id="ringBar" cx="150" cy="150" r="136" fill="none" stroke-width="6"
+                    stroke-linecap="round" transform="rotate(-90 150 150)"/>
+          </svg>
+          <div class="timer-face">
+            <div class="timer-face__mode" id="timerMode">专注</div>
+            <div class="timer-face__time" id="timerTime">25:00</div>
+            <div class="timer-face__hint" id="timerHint">准备开始</div>
+          </div>
+        </div>
+
+        <div class="rounds" id="roundDots"><!-- 番茄轮次点 --></div>
+
+        <button class="task-pick" id="taskPick" type="button">
+          <span class="task-pick__dot"></span>
+          <span class="task-pick__label" id="taskPickLabel">未绑定任务</span>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+
+        <div class="timer-actions">
+          <button class="btn btn--ghost" id="btnReset" type="button">重置</button>
+          <button class="btn btn--primary btn--lg" id="btnToggle" type="button">开始专注</button>
+        </div>
+
+        <div class="grid-2" id="focusQuick"><!-- 时长快捷设置 --></div>
+
+        <h2 class="section-title"><span>今日记录</span><span class="section-title__meta" id="todayFocusTotal"></span></h2>
+        <div class="stack stack--tight" id="sessionList"><!-- 今日专注记录 --></div>
+      </div>
+
+      <!-- 深度专注 -->
+      <div id="deepPane" hidden>
+        <div class="card card--pad deep-intro">
+          <div class="deep-intro__icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5l3 2"/>
+            </svg>
+          </div>
+          <h3>沉浸式深度专注</h3>
+          <p>全屏纯色护眼界面，隐藏所有按钮与倒计时。没有数字跳动，只有你和眼前这件事。长按屏幕中央 2 秒即可结束。</p>
+          <div class="deep-pick" id="deepDuration">
+            <button class="chip is-active" data-min="0" type="button">不限时</button>
+            <button class="chip" data-min="30" type="button">30 分钟</button>
+            <button class="chip" data-min="45" type="button">45 分钟</button>
+            <button class="chip" data-min="60" type="button">60 分钟</button>
+            <button class="chip" data-min="90" type="button">90 分钟</button>
+          </div>
+          <button class="btn btn--primary btn--block" id="btnDeepStart" type="button">进入深度专注</button>
+        </div>
+        <div class="card card--pad">
+          <h4 class="card__title">纯专注时长统计</h4>
+          <div class="stat-row" id="deepStats"><!-- 今日/本周/累计 --></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======== 4. 数据 ======== -->
+    <section class="page" data-page="stats" id="page-stats">
+      <div class="seg seg--full" id="statsSeg" role="tablist">
+        <button class="seg__btn" data-range="day" type="button">今日</button>
+        <button class="seg__btn is-active" data-range="week" type="button">本周</button>
+        <button class="seg__btn" data-range="month" type="button">本月</button>
+      </div>
+
+      <div class="kpi-grid" id="kpiGrid"><!-- 关键指标 --></div>
+
+      <div class="card card--pad">
+        <div class="card__head">
+          <h3 class="card__title">专注趋势</h3>
+          <span class="card__meta" id="trendMeta"></span>
+        </div>
+        <div id="trendChart" class="chart-box"><!-- 折线图 --></div>
+      </div>
+
+      <div class="card card--pad">
+        <div class="card__head">
+          <h3 class="card__title">象限完成率</h3>
+          <span class="card__meta">完成 / 总数</span>
+        </div>
+        <div id="quadStats" class="quad-stats"><!-- 四象限完成率 --></div>
+      </div>
+
+      <div class="card card--pad">
+        <div class="card__head">
+          <h3 class="card__title">效率复盘</h3>
+          <span class="card__meta">自动生成</span>
+        </div>
+        <ul class="review" id="reviewList"><!-- 复盘文案 --></ul>
+      </div>
+    </section>
+
+    <!-- ======== 5. 我的 / 设置 ======== -->
+    <section class="page" data-page="me" id="page-me">
+      <div class="profile" id="profileCard"><!-- 累计数据 --></div>
+
+      <h2 class="section-title">专注设置</h2>
+      <div class="card card--list">
+        <div class="row row--slider">
+          <div class="row__main"><span class="row__label">专注时长</span><span class="row__desc">10 – 120 分钟</span></div>
+          <div class="stepper" data-key="focusMin" data-min="10" data-max="120" data-step="5">
+            <button data-act="dec" type="button">−</button><span class="stepper__val">25</span><button data-act="inc" type="button">+</button>
+          </div>
+        </div>
+        <div class="row row--slider">
+          <div class="row__main"><span class="row__label">休息时长</span><span class="row__desc">1 – 30 分钟</span></div>
+          <div class="stepper" data-key="breakMin" data-min="1" data-max="30" data-step="1">
+            <button data-act="dec" type="button">−</button><span class="stepper__val">5</span><button data-act="inc" type="button">+</button>
+          </div>
+        </div>
+        <div class="row row--slider">
+          <div class="row__main"><span class="row__label">长休息时长</span><span class="row__desc">每 4 轮后</span></div>
+          <div class="stepper" data-key="longBreakMin" data-min="5" data-max="45" data-step="1">
+            <button data-act="dec" type="button">−</button><span class="stepper__val">15</span><button data-act="inc" type="button">+</button>
+          </div>
+        </div>
+        <label class="row">
+          <div class="row__main"><span class="row__label">结束后自动休息</span><span class="row__desc">减少一次点击</span></div>
+          <input class="switch" type="checkbox" data-key="autoBreak">
+        </label>
+        <label class="row">
+          <div class="row__main"><span class="row__label">结束温和提醒</span><span class="row__desc">轻震动 + 单音提示</span></div>
+          <input class="switch" type="checkbox" data-key="notify">
+        </label>
+      </div>
+
+      <h2 class="section-title">显示</h2>
+      <div class="card card--list">
+        <div class="row row--col">
+          <span class="row__label">外观</span>
+          <div class="seg seg--full seg--sm" id="themeSeg">
+            <button class="seg__btn" data-theme-val="light" type="button">浅色</button>
+            <button class="seg__btn" data-theme-val="dark" type="button">深色</button>
+            <button class="seg__btn" data-theme-val="auto" type="button">跟随系统</button>
+          </div>
+        </div>
+        <div class="row row--col">
+          <span class="row__label">深度专注底色</span>
+          <div class="seg seg--full seg--sm" id="deepThemeSeg">
+            <button class="seg__btn" data-deep="white" type="button">纯白护眼</button>
+            <button class="seg__btn" data-deep="black" type="button">纯黑暗色</button>
+          </div>
+        </div>
+      </div>
+
+      <h2 class="section-title">数据</h2>
+      <div class="card card--list">
+        <button class="row row--btn" id="btnExport" type="button">
+          <span class="row__label">导出数据（JSON 备份）</span>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+        <button class="row row--btn" id="btnImport" type="button">
+          <span class="row__label">导入数据</span>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+        <button class="row row--btn row--danger" id="btnClear" type="button">
+          <span class="row__label">清空全部数据</span>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+      </div>
+
+      <div class="about">
+        <p class="about__name">Focus · 专注 1.0.0</p>
+        <p class="about__desc">无广告 · 无推送 · 无社区 · 全本地存储</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- ---------- 底部导航 ---------- -->
+  <nav class="tabbar" id="tabbar">
+    <button class="tab is-active" data-page="tasks" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg>
+      <span>任务</span>
+    </button>
+    <button class="tab" data-page="todo" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><path d="m4 6 1.4 1.4L7.6 5"/><path d="m4 12 1.4 1.4L7.6 11"/></svg>
+      <span>待办</span>
+    </button>
+    <button class="tab" data-page="focus" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 1.5"/><path d="M9 2h6"/></svg>
+      <span>专注</span>
+    </button>
+    <button class="tab" data-page="stats" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m7.5 15 3.5-4 3 2.5 4.5-6"/></svg>
+      <span>数据</span>
+    </button>
+    <button class="tab" data-page="me" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 20c0-3.9 3.1-6.5 7-6.5s7 2.6 7 6.5"/></svg>
+      <span>我的</span>
+    </button>
+  </nav>
+</div>
+
+<!-- ============ 任务编辑面板 ============ -->
+<div class="sheet" id="taskSheet" aria-hidden="true">
+  <div class="sheet__mask" data-close></div>
+  <div class="sheet__panel" role="dialog" aria-modal="true">
+    <div class="sheet__grab"></div>
+    <div class="sheet__head">
+      <h3 class="sheet__title" id="sheetTitle">新建任务</h3>
+      <button class="icon-btn icon-btn--sm" data-close type="button" aria-label="关闭">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+
+    <div class="sheet__body">
+      <input class="field field--title" id="fTitle" type="text" placeholder="要做什么？" maxlength="80" autocomplete="off">
+      <div class="suggest" id="suggestChip" hidden>
+        <span class="suggest__icon">✦</span>
+        <span class="suggest__text" id="suggestText"></span>
+        <button class="suggest__use" id="suggestUse" type="button" hidden>采用</button>
+      </div>
+
+      <div class="quad-pick" id="quadPick">
+        <button class="quad-pick__btn q1" data-q="1" type="button"><b>重要且紧急</b><i>立即做</i></button>
+        <button class="quad-pick__btn q2" data-q="2" type="button"><b>重要不紧急</b><i>重点深耕</i></button>
+        <button class="quad-pick__btn q3" data-q="3" type="button"><b>紧急不重要</b><i>快速处理</i></button>
+        <button class="quad-pick__btn q4" data-q="4" type="button"><b>不紧急不重要</b><i>尽量少做</i></button>
+      </div>
+
+      <textarea class="field field--area" id="fNote" placeholder="备注（可选）：题目来源、目标页数、卡在哪一步…" maxlength="400"></textarea>
+
+      <div class="field-row">
+        <label class="field-label" for="fDue">截止时间</label>
+        <input class="field field--date" id="fDue" type="datetime-local">
+      </div>
+
+      <label class="row row--inline">
+        <div class="row__main"><span class="row__label">置顶到今日重点</span></div>
+        <input class="switch" type="checkbox" id="fPin">
+      </label>
+
+      <div class="field-row field-row--est">
+        <span class="field-label">预计番茄数</span>
+        <div class="stepper" id="fEst" data-min="0" data-max="12" data-step="1">
+          <button data-act="dec" type="button">−</button><span class="stepper__val">0</span><button data-act="inc" type="button">+</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="sheet__foot">
+      <button class="btn btn--ghost btn--danger" id="sheetDelete" type="button">删除</button>
+      <button class="btn btn--primary btn--grow" id="sheetSave" type="button">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 通用选择面板（任务选择等） ============ -->
+<div class="sheet" id="pickSheet" aria-hidden="true">
+  <div class="sheet__mask" data-close></div>
+  <div class="sheet__panel sheet__panel--auto" role="dialog" aria-modal="true">
+    <div class="sheet__grab"></div>
+    <div class="sheet__head">
+      <h3 class="sheet__title" id="pickTitle">选择</h3>
+      <button class="icon-btn icon-btn--sm" data-close type="button" aria-label="关闭">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+    <div class="sheet__body" id="pickBody"></div>
+  </div>
+</div>
+
+<!-- ============ 深度专注全屏层 ============ -->
+<div class="deep" id="deepLayer" aria-hidden="true">
+  <div class="deep__inner">
+    <div class="deep__pulse" id="deepPulse"><span></span></div>
+    <div class="deep__time" id="deepTime"></div>
+    <div class="deep__label" id="deepLabel">专注中</div>
+    <div class="deep__hint" id="deepHint">长按 2 秒结束</div>
+  </div>
+</div>
+
+<!-- ============ 提示条 ============ -->
+<div class="toast" id="toast" role="status"></div>
+
+<script src="js/util.js"></script>
+<script src="js/store.js"></script>
+<script src="js/tasks.js"></script>
+<script src="js/todo.js"></script>
+<script src="js/focus.js"></script>
+<script src="js/stats.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
