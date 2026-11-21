@@ -1,0 +1,25 @@
+# ---------- 构建工具链（JDK + Android build-tools + platform，约 560MB）----------
+# 由 scripts/build_apk.sh 自动下载，不入库
+tools/
+
+# ---------- 构建中间产物 ----------
+build/
+shots/
+# android/app/src/main/assets/www 是 build_apk.sh 每次从 www/ 复制过来的，
+# 入库会变成两份会走样的前端代码
+android/app/src/main/assets/
+
+# ---------- 签名密钥 ----------
+# build_apk.sh 首次构建时用 keytool 自动生成，不入库（换机重跑会重新生成）
+keystore/
+# apksigner 生成的签名附属文件
+*.idsig
+
+# ---------- 系统 / 编辑器 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~
