@@ -229,7 +229,7 @@
 
     // 首次进入给一句提示
     setTimeout(function () {
-      if (!S.state.tasks.length) U.toast('长按任务卡片可拖到其他象限');
+      if (!S.state.tasks.length) U.toast('按住任务卡片可拖动排序，拖到别的象限可以换区');
     }, 1200);
   }
 

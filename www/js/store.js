@@ -67,6 +67,44 @@
   }
   const writeSoon = U.debounce(writeNow, 260);
 
+  /* ------------------------- 排序 ------------------------- */
+  /** 显示顺序：先未完成、后已完成；同组内按 ord 升序（ord 由拖拽写入） */
+  function displayOrder(a, b) {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    const ao = a.ord == null ? Infinity : a.ord;
+    const bo = b.ord == null ? Infinity : b.ord;
+    if (ao !== bo) return ao - bo;
+    return b.createdAt - a.createdAt;
+  }
+
+  /** 老数据没有 ord：按升级前的规则（置顶 → 截止近 → 新建早）落成一份显式顺序 */
+  function normalizeOrd(tasks) {
+    const groups = {};
+    tasks.forEach(function (t) { (groups[t.q] || (groups[t.q] = [])).push(t); });
+    Object.keys(groups).forEach(function (q) {
+      const list = groups[q];
+      if (list.every(function (t) { return t.ord != null; })) return;
+      list.sort(function (a, b) {
+        if (a.done !== b.done) return a.done ? 1 : -1;
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        const ad = a.due || Infinity, bd = b.due || Infinity;
+        if (ad !== bd) return ad - bd;
+        return b.createdAt - a.createdAt;
+      }).forEach(function (t, i) { t.ord = (i + 1) * 10; });
+    });
+  }
+
+  /** 组内最靠前的 ord 再往上挪一格：新增 / 置顶时用 */
+  function topOrd(q, done, excludeId) {
+    let min = Infinity;
+    state.tasks.forEach(function (t) {
+      if (t.q === q && !!t.done === !!done && t.id !== excludeId && typeof t.ord === 'number') {
+        if (t.ord < min) min = t.ord;
+      }
+    });
+    return min === Infinity ? 10 : min - 10;
+  }
+
   /** 数据迁移 / 结构补全：保证旧版本数据不会因缺字段崩溃 */
   function migrate(raw) {
     const s = Object.assign(emptyState(), raw || {});
@@ -82,10 +120,12 @@
         due: t.due || null,
         est: t.est == null ? 0 : t.est,
         spent: t.spent || 0,
+        ord: typeof t.ord === 'number' && isFinite(t.ord) ? t.ord : null,
         createdAt: t.createdAt || Date.now(),
         doneAt: t.doneAt || null
       };
     });
+    normalizeOrd(s.tasks);
     s.todos = (s.todos || []).filter(function (t) { return t && t.title; });
     s.goals = (s.goals || []).filter(function (g) { return g && g.title; });
     s.sessions = (s.sessions || []).filter(function (x) { return x && x.start; });
@@ -123,6 +163,7 @@
       doneAt: null
     };
     if (!task.title) return null;
+    task.ord = topOrd(task.q, false, null);   // 新任务落在未完成组最前面
     state.tasks.unshift(task);
     changed({ type: 'task:add', task: task });
     return task;
@@ -131,7 +172,10 @@
   function updateTask(id, patch) {
     const t = state.tasks.find(function (x) { return x.id === id; });
     if (!t) return null;
+    const wasPinned = !!t.pinned;
     Object.keys(patch).forEach(function (k) { t[k] = patch[k]; });
+    // 新置顶：浮到所在组的最前面（之后仍可用拖拽自由调整）
+    if (!wasPinned && t.pinned) t.ord = topOrd(t.q, t.done, t.id);
     changed({ type: 'task:update', task: t });
     return t;
   }
@@ -163,7 +207,52 @@
     const t = state.tasks.find(function (x) { return x.id === id; });
     if (!t) return;
     t.pinned = !t.pinned;
+    // 置顶＝一键浮到所在组的最前面，之后仍可用拖拽自由调整
+    if (t.pinned) t.ord = topOrd(t.q, t.done, t.id);
     changed({ type: 'task:pin', task: t });
+  }
+
+  /**
+   * 拖拽排序：把任务放到象限 q 的 beforeId 之前（beforeId 为空＝放到组末）。
+   * 完成 / 未完成为两个分组，落点自动吸附到所属分组的边界内。
+   * 返回是否真的发生了变化。
+   */
+  function reorderTask(id, q, beforeId) {
+    const t = state.tasks.find(function (x) { return x.id === id; });
+    if (!t) return false;
+    const targetQ = U.clamp(parseInt(q, 10) || t.q, 1, 4);
+    const prevQ = t.q;
+
+    const list = state.tasks
+      .filter(function (x) { return x.q === targetQ && x.id !== id; })
+      .sort(displayOrder);
+
+    let idx = list.length;
+    if (beforeId) {
+      const j = list.findIndex(function (x) { return x.id === beforeId; });
+      if (j >= 0) idx = j;
+    }
+    // 不允许跨「完成状态」分组落位
+    const openCount = list.filter(function (x) { return !x.done; }).length;
+    const from = t.done ? openCount : 0;
+    const to = t.done ? list.length : openCount;
+    idx = U.clamp(idx, from, to);
+
+    const beforeOrder = state.tasks
+      .filter(function (x) { return x.q === targetQ; })
+      .sort(displayOrder)
+      .map(function (x) { return x.id; })
+      .join('|');
+
+    list.splice(idx, 0, t);
+    t.q = targetQ;
+    list.forEach(function (x, i) { x.ord = (i + 1) * 10; });
+
+    const afterOrder = list.map(function (x) { return x.id; }).join('|');
+    if (prevQ === targetQ && beforeOrder === afterOrder) return false;
+
+    changed({ type: 'task:reorder', task: t });
+    return true;
   }
 
   /* ============================ 待办 ============================ */
@@ -334,6 +423,7 @@
     get settings() { return state.settings; },
     addTask: addTask, updateTask: updateTask, deleteTask: deleteTask,
     toggleTask: toggleTask, moveTask: moveTask, togglePin: togglePin,
+    reorderTask: reorderTask, displayOrder: displayOrder,
     addTodo: addTodo, toggleTodo: toggleTodo, deleteTodo: deleteTodo,
     addGoal: addGoal, stepGoal: stepGoal, archiveGoal: archiveGoal, deleteGoal: deleteGoal,
     addSession: addSession, setTimer: setTimer, setSetting: setSetting,

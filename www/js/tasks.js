@@ -15,7 +15,6 @@
   let suggestQ = 0;        // 智能建议的象限：只做提示，绝不自动切换选中态
   let userPickedQ = false; // 用户是否手动选过象限
   let view = 'matrix';     // matrix | list
-  let justDragged = false; // 拖拽结束后抑制一次 click
 
   /* ========================= 通用 Stepper ========================= */
   function bindStepper(node, onChange) {
@@ -59,13 +58,8 @@
   global.Sheet = { open: openSheet, close: closeSheet, closeAll: closeAllSheets };
 
   /* ========================= 渲染：矩阵 ========================= */
-  function taskOrder(a, b) {
-    if (a.done !== b.done) return a.done ? 1 : -1;
-    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-    const ad = a.due || Infinity, bd = b.due || Infinity;
-    if (ad !== bd) return ad - bd;
-    return b.createdAt - a.createdAt;
-  }
+  /* 顺序规则交给 Store：未完成在前、已完成在后，组内按手动顺序 ord */
+  function taskOrder(a, b) { return S.displayOrder(a, b); }
 
   function tasksOf(q) {
     return S.tasks.filter(function (t) { return t.q === q; }).sort(taskOrder);
@@ -189,7 +183,28 @@
       '<span class="overview__val">' + done + '/' + total + '</span>';
   }
 
+  /* 重绘会重建 DOM：先记下各区域的滚动位置，重建后放回去，
+     这样拖动结束后列表不会跳回顶部 */
+  function captureScroll() {
+    const map = {};
+    U.$$('#matrix .quad__body').forEach(function (b) {
+      if (b.dataset.drop) map[b.dataset.drop] = b.scrollTop;
+    });
+    const lv = U.$('#listView');
+    if (lv) map.__list = lv.scrollTop;
+    return map;
+  }
+  function restoreScroll(map) {
+    U.$$('#matrix .quad__body').forEach(function (b) {
+      const v = map[b.dataset.drop];
+      if (v) b.scrollTop = v;
+    });
+    const lv = U.$('#listView');
+    if (lv && map.__list) lv.scrollTop = map.__list;
+  }
+
   function render() {
+    const keep = captureScroll();
     renderOverview();
     renderMatrix();
     renderList();
@@ -198,122 +213,294 @@
     if (list) list.hidden = view !== 'list';
     if (legend) legend.hidden = view !== 'matrix';   // 清单视图不需要坐标轴图例
     if (matrix) matrix.style.display = view === 'matrix' ? 'grid' : 'none';
+    restoreScroll(keep);
+    syncScrollMask();
   }
 
-  /* ========================= 拖拽 ========================= */
-  let drag = null;
+  /* ========================= 拖拽：排序 + 跨象限 ========================= */
+  const HOLD_MS = 280;      // 触屏：长按多久进入拖拽
+  const MOUSE_SLOP = 5;     // 鼠标：按下后移动多少像素开始拖
+  const TOUCH_SLOP = 9;     // 触屏：长按前手指移动超过这个距离＝在滚动页面
+  const EDGE = 46;          // 自动滚动的边缘触发区
+  const HINT_KEY = 'focus.drag.hint';
 
-  function beginDrag(taskEl, startEvent) {
-    const id = taskEl.dataset.id;
-    const task = S.tasks.find(function (t) { return t.id === id; });
-    if (!task) return;
+  let drag = null;      // 正在拖拽
+  let press = null;     // 已按下、还没进入拖拽
+  let lineEl = null;    // 插入位置指示线
+  let rafId = 0;
+  let justDragged = false;
 
+  function clearPress() {
+    if (!press) return;
+    clearTimeout(press.timer);
+    if (press.card) press.card.classList.remove('is-press');
+    press = null;
+  }
+
+  function ghostOf(task) {
     const ghost = document.createElement('div');
     ghost.className = 'drag-ghost';
-    ghost.textContent = task.title;
+    ghost.innerHTML = '<span class="drag-ghost__grip" aria-hidden="true"></span>' +
+      '<span class="drag-ghost__text">' + U.escapeHtml(task.title) + '</span>';
     document.body.appendChild(ghost);
+    return ghost;
+  }
 
-    drag = { id: id, ghost: ghost, from: task.q, over: null, sourceEl: taskEl, pointerId: startEvent.pointerId };
-    taskEl.classList.add('is-dragging');
-    document.body.style.userSelect = 'none';
+  function startDrag(card, x, y, touch) {
+    const task = S.tasks.find(function (t) { return t.id === card.dataset.id; });
+    clearPress();
+    if (!task || drag) return;
+
+    const ghost = ghostOf(task);
+    drag = {
+      id: task.id, task: task, card: card, ghost: ghost,
+      fromQ: task.q, toQ: task.q, beforeId: null,
+      container: null, scroller: null,
+      x: x, y: y, touch: touch,
+      gw: ghost.offsetWidth, gh: ghost.offsetHeight
+    };
+
+    card.classList.add('is-dragging');
+    document.body.classList.add('is-dragging');
     U.haptic('medium');
+    moveGhost(x, y);
+    updateTarget(x, y);
 
-    moveGhost(startEvent.clientX, startEvent.clientY);
-
-    // 拖拽期间锁定滚动，避免手势冲突
+    // 拖拽期间手指不能滚页面（改为拖到边缘自动滚）
     document.addEventListener('touchmove', blockTouchMove, { passive: false });
-    window.addEventListener('pointermove', onDragMove, { passive: false });
-    window.addEventListener('pointerup', onDragEnd);
-    window.addEventListener('pointercancel', onDragEnd);
+    cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(autoScroll);
+    hintOnce();
   }
 
   function blockTouchMove(e) { e.preventDefault(); }
 
   function moveGhost(x, y) {
     if (!drag) return;
-    drag.ghost.style.left = (x - 76) + 'px';
-    drag.ghost.style.top = (y - 30) + 'px';
+    const maxX = Math.max(4, (global.innerWidth || 360) - drag.gw - 4);
+    // 触屏时把预览抬到手指上方，避免被自己的手挡住落点
+    drag.ghost.style.left = U.clamp(x - drag.gw / 2, 4, maxX) + 'px';
+    drag.ghost.style.top = Math.max(4, y - (drag.touch ? drag.gh + 16 : drag.gh / 2)) + 'px';
   }
 
-  function onDragMove(e) {
+  /** 指针下方属于哪个区域 / 插到哪两张卡片之间 */
+  function updateTarget(x, y) {
     if (!drag) return;
-    moveGhost(e.clientX, e.clientY);
-    const under = document.elementFromPoint(e.clientX, e.clientY);
-    const quad = under && under.closest ? under.closest('.quad') : null;
-    const q = quad ? parseInt(quad.dataset.q, 10) : null;
-    if (drag.over !== q) {
-      U.$$('.quad').forEach(function (n) { n.classList.remove('is-over'); });
-      if (quad && q !== drag.from) quad.classList.add('is-over');
-      drag.over = q;
+    const el = document.elementFromPoint(x, y);
+    if (!el) return;
+
+    const group = el.closest ? el.closest('.lgroup') : null;
+    const quad = el.closest ? el.closest('.quad') : null;
+    let container = null, q = drag.toQ;
+
+    if (view === 'list' && group) {
+      container = group;
+      q = parseInt(group.dataset.q, 10) || drag.fromQ;
+    } else if (quad) {
+      container = quad.querySelector('.quad__body');
+      q = parseInt(quad.dataset.q, 10) || drag.fromQ;
     }
+    if (!container) return;   // 指针离开了任务区：保持上一次的落点
+
+    drag.toQ = q;
+    drag.container = container;
+    drag.scroller = container.classList.contains('quad__body') ? container : U.$('#listView');
+
+    // 目标区域淡色点亮（拖回原象限就不必高亮）
+    U.$$('.quad').forEach(function (n) {
+      n.classList.toggle('is-over', parseInt(n.dataset.q, 10) === q && q !== drag.fromQ);
+    });
+    U.$$('.lgroup').forEach(function (n) {
+      n.classList.toggle('is-over', n === group && q !== drag.fromQ);
+    });
+
+    const cards = Array.prototype.slice.call(container.querySelectorAll('.task'))
+      .filter(function (c) { return c !== drag.card; });
+    const done = !!drag.task.done;
+
+    let before = null;
+    for (let i = 0; i < cards.length; i++) {
+      const r = cards[i].getBoundingClientRect();
+      if (y < r.top + r.height / 2) { before = cards[i]; break; }
+    }
+    // 完成 / 未完成是两个分组：落点被拽到另一组时，吸附到两组的交界
+    if (before && before.classList.contains('is-done') !== done) {
+      before = cards.filter(function (c) { return c.classList.contains('is-done'); })[0] || null;
+    }
+
+    drag.beforeId = before ? before.dataset.id : null;
+    placeLine(container, before);
   }
 
-  function onDragEnd() {
+  function placeLine(container, before) {
+    if (!lineEl) {
+      lineEl = document.createElement('div');
+      lineEl.className = 'drop-line';
+      lineEl.setAttribute('aria-hidden', 'true');
+    }
+    if (lineEl.parentNode !== container) container.appendChild(lineEl);
+
+    const cr = container.getBoundingClientRect();
+    const scrolled = container.scrollTop || 0;
+    let top;
+    if (before) {
+      top = before.getBoundingClientRect().top - cr.top + scrolled - 3;
+    } else {
+      const cards = container.querySelectorAll('.task');
+      const last = cards.length ? cards[cards.length - 1] : null;
+      top = last
+        ? last.getBoundingClientRect().bottom - cr.top + scrolled + 1
+        : 6;
+    }
+    lineEl.style.top = Math.max(0, Math.round(top)) + 'px';
+    lineEl.classList.add('is-on');
+  }
+
+  /** 拖到容器上下边缘时自动滚动，长列表也能拖到看不见的位置 */
+  function autoScroll() {
     if (!drag) return;
+    const sc = drag.scroller;
+    if (sc) {
+      const r = sc.getBoundingClientRect();
+      let dy = 0;
+      if (drag.y < r.top + EDGE) dy = -Math.ceil((r.top + EDGE - drag.y) / 3);
+      else if (drag.y > r.bottom - EDGE) dy = Math.ceil((drag.y - (r.bottom - EDGE)) / 3);
+      if (dy) {
+        dy = U.clamp(dy, -18, 18);
+        const before = sc.scrollTop;
+        sc.scrollTop = before + dy;
+        if (sc.scrollTop !== before) updateTarget(drag.x, drag.y);
+      }
+    }
+    rafId = requestAnimationFrame(autoScroll);
+  }
+
+  function endDrag(commit, point) {
+    if (!drag) return;
+    if (commit && point) updateTarget(point.x, point.y);
+
     const d = drag;
     drag = null;
+    cancelAnimationFrame(rafId);
+    rafId = 0;
     d.ghost.remove();
-    document.body.style.userSelect = '';
-    U.$$('.quad').forEach(function (n) { n.classList.remove('is-over'); });
+    d.card.classList.remove('is-dragging');
+    document.body.classList.remove('is-dragging');
     document.removeEventListener('touchmove', blockTouchMove);
-    window.removeEventListener('pointermove', onDragMove);
-    window.removeEventListener('pointerup', onDragEnd);
-    window.removeEventListener('pointercancel', onDragEnd);
+    U.$$('.quad, .lgroup').forEach(function (n) { n.classList.remove('is-over'); });
+    if (lineEl) { lineEl.classList.remove('is-on'); lineEl.remove(); }
 
     justDragged = true;
-    setTimeout(function () { justDragged = false; }, 320);
+    setTimeout(function () { justDragged = false; }, 340);
 
-    if (d.over && d.over !== d.from) {
-      S.moveTask(d.id, d.over);
+    if (!commit) { render(); return; }
+    if (!d.container) { render(); return; }   // 没有落在任何任务区：当作取消
+
+    if (S.reorderTask(d.id, d.toQ, d.beforeId)) {
+      render();                      // 立刻反映新顺序
       U.haptic('success');
-      U.toast('已移动到「' + U.quad(d.over).name + '」');
+      if (d.toQ !== d.fromQ) U.toast('已移动到「' + U.quad(d.toQ).name + '」');
+      markSettled(d.id);
     } else {
       render();
     }
   }
 
+  /** 落位后轻轻闪一下描边，告诉用户「就是放在这儿了」 */
+  function markSettled(id) {
+    setTimeout(function () {
+      const root = U.$(view === 'matrix' ? '#matrix' : '#listView');
+      const el = root ? root.querySelector('.task[data-id="' + id + '"]') : null;
+      if (!el) return;
+      el.classList.add('is-settle');
+      setTimeout(function () { el.classList.remove('is-settle'); }, 720);
+    }, 80);
+  }
+
+  function hintOnce() {
+    if (hintShown) return;
+    hintShown = true;
+    let seen = false;
+    try { seen = localStorage.getItem(HINT_KEY) === '1'; } catch (e) {}
+    if (seen) return;
+    try { localStorage.setItem(HINT_KEY, '1'); } catch (e) {}
+    U.toast('拖动可以调整顺序 · 拖到别的象限会移动任务');
+  }
+
+  /* 指针事件：桌面按下即拖，触屏长按再拖 */
+  function bindDrag() {
+    window.addEventListener('pointerdown', function (e) {
+      if (e.button > 0 || drag) return;
+      const card = e.target.closest ? e.target.closest('.task') : null;
+      if (!card || !card.closest('#matrix, #listView')) return;
+      if (e.target.closest('[data-act="toggle"]')) return;   // 勾选不进入拖拽
+      if (U.$('.sheet.is-open')) return;
+
+      clearPress();
+      press = {
+        card: card,
+        x0: e.clientX, y0: e.clientY,
+        x: e.clientX, y: e.clientY,
+        mouse: e.pointerType !== 'touch',
+        timer: 0
+      };
+      card.classList.add('is-press');
+      if (!press.mouse) {
+        const target = card;
+        press.timer = setTimeout(function () {
+          if (!press || press.card !== target) return;
+          startDrag(target, press.x, press.y, true);
+        }, HOLD_MS);
+      }
+    }, { passive: true });
+
+    window.addEventListener('pointermove', function (e) {
+      if (drag) {
+        drag.x = e.clientX;
+        drag.y = e.clientY;
+        moveGhost(drag.x, drag.y);
+        updateTarget(drag.x, drag.y);
+        if (!drag.touch && e.cancelable) e.preventDefault();
+        return;
+      }
+      if (!press) return;
+
+      press.x = e.clientX;
+      press.y = e.clientY;
+      const dx = Math.abs(e.clientX - press.x0);
+      const dy = Math.abs(e.clientY - press.y0);
+
+      if (press.mouse) {
+        // 桌面：按住往上下一拖就走，不用等长按
+        if (dx + dy > MOUSE_SLOP) startDrag(press.card, e.clientX, e.clientY, false);
+      } else if (dx + dy > TOUCH_SLOP) {
+        clearPress();   // 手指在滚页面，不是在拖
+      }
+    }, { passive: false });
+
+    function finish(e) {
+      if (drag) {
+        endDrag(true, e && typeof e.clientX === 'number' ? { x: e.clientX, y: e.clientY } : null);
+        return;
+      }
+      clearPress();
+    }
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', function () {
+      if (drag) { endDrag(false); return; }
+      clearPress();
+    });
+    window.addEventListener('blur', function () {
+      if (drag) endDrag(false);
+      clearPress();
+    });
+  }
+
   /* ========================= 事件绑定 ========================= */
   function bind() {
-    const matrix = U.$('#matrix');
-
-    // —— 长按拖拽 + 点按编辑（矩阵 & 清单共用同一套逻辑）——
-    function attach(container) {
+    // —— 点按编辑 / 勾选（矩阵与清单共用）——
+    function bindClicks(container) {
       if (!container) return;
-      let pressTimer = null, startX = 0, startY = 0, candidate = null, dragging = false;
-
-      container.addEventListener('pointerdown', function (e) {
-        const card = e.target.closest('.task');
-        if (!card || e.button > 0) return;
-        if (e.target.closest('[data-act="toggle"]')) return; // 勾选不进入拖拽
-        candidate = card;
-        dragging = false;
-        startX = e.clientX; startY = e.clientY;
-        clearTimeout(pressTimer);
-        pressTimer = setTimeout(function () {
-          if (!candidate) return;
-          dragging = true;
-          beginDrag(candidate, { clientX: startX, clientY: startY, pointerId: e.pointerId });
-        }, 280);
-      }, { passive: true });
-
-      container.addEventListener('pointermove', function (e) {
-        if (!candidate || dragging) return;
-        if (Math.abs(e.clientX - startX) > 9 || Math.abs(e.clientY - startY) > 9) {
-          clearTimeout(pressTimer);
-          candidate = null;
-        }
-      }, { passive: true });
-
-      function cancelPress() {
-        clearTimeout(pressTimer);
-        if (!dragging) candidate = null;
-        dragging = false;
-      }
-      container.addEventListener('pointerup', cancelPress);
-      container.addEventListener('pointercancel', cancelPress);
-      container.addEventListener('pointerleave', function () { clearTimeout(pressTimer); });
-
-      // 点击行为
       container.addEventListener('click', function (e) {
         if (justDragged) { e.stopPropagation(); return; }
         const addBtn = e.target.closest('[data-add]');
@@ -333,8 +520,9 @@
         if (editArea) openEdit(card.dataset.id);
       });
     }
-    attach(matrix);
-    attach(U.$('#listView'));
+    bindClicks(U.$('#matrix'));
+    bindClicks(U.$('#listView'));
+    bindDrag();
 
     // —— 尺寸变化：重新判断是否需要底部渐隐 ——
     let resizeTimer = null;

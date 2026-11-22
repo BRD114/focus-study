@@ -6,7 +6,7 @@
 #         → d8 转 dex → 打包 → zipalign 对齐 → apksigner 签名 → 校验
 #
 #   用法： bash scripts/build_apk.sh
-#   产物： dist/Focus-1.0.5.apk
+#   产物： dist/Focus-1.0.6.apk
 # =============================================================================
 set -euo pipefail
 
@@ -24,8 +24,8 @@ ANDROID_JAR="$PLATFORM/android.jar"
 APP="android/app/src/main"
 BUILD="$ROOT/build"
 DIST="$ROOT/dist"
-VERSION_NAME="1.0.5"
-VERSION_CODE="6"
+VERSION_NAME="1.0.6"
+VERSION_CODE="7"
 
 say() { printf '\n\033[1;32m▶ %s\033[0m\n' "$1"; }
 die() { printf '\n\033[1;31m✗ %s\033[0m\n' "$1"; exit 1; }
